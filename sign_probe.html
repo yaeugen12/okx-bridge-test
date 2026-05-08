@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OKX_SIGN_PROBE</title>
+<style>
+body{font-family:monospace;font-size:12px;padding:6px;background:#fff;color:#000}
+button{padding:12px;margin:6px 0;font-size:14px;background:#0066cc;color:#fff;border:0;display:block;width:100%;border-radius:6px}
+.danger{background:#cc0000}
+pre{background:#eee;padding:4px;font-size:10px;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow:auto}
+.h{background:#ff0;padding:2px}
+</style></head><body>
+<h2>OKX Wallet Signing Probe</h2>
+<p>URL: <span class="h" id="u"></span></p>
+
+<button onclick="ethConnect()">[ETH] eth_requestAccounts (CONNECT)</button>
+<button onclick="ethGetAccounts()">[ETH] eth_accounts (read)</button>
+<button onclick="ethPersonalSign()" class="danger">[ETH] personal_sign 'phishing-test'</button>
+<button onclick="ethSendTx()" class="danger">[ETH] eth_sendTransaction (0 value to 0xdead)</button>
+
+<button onclick="solConnect()">[SOL] _solana_.postMessage 'connect'</button>
+<button onclick="solSignMessage()" class="danger">[SOL] _solana_.postMessage 'signMessage'</button>
+
+<pre id="out">click a button</pre>
+
+<script>
+document.getElementById("u").textContent = location.href;
+var out = document.getElementById("out");
+function log(t){ out.textContent = (new Date().toISOString().substr(11,12)) + " " + t + "\n" + out.textContent; }
+
+async function ethConnect(){
+  log("CALLING ethereum.request({method:'eth_requestAccounts'})...");
+  try{
+    var p = window.ethereum || window.okxwallet;
+    var r = await p.request({method:"eth_requestAccounts"});
+    log("RETURNED: " + JSON.stringify(r));
+  }catch(e){ log("ERROR: " + e.message); }
+}
+
+async function ethGetAccounts(){
+  try{
+    var p = window.ethereum || window.okxwallet;
+    var r = await p.request({method:"eth_accounts"});
+    log("eth_accounts: " + JSON.stringify(r));
+  }catch(e){ log("ERROR: " + e.message); }
+}
+
+async function ethPersonalSign(){
+  log("CALLING personal_sign...");
+  try{
+    var p = window.ethereum || window.okxwallet;
+    var acc = await p.request({method:"eth_accounts"});
+    if(!acc || !acc.length){ log("Need to connect first"); return; }
+    var msg = "0x" + Array.from("phishing-test-do-not-sign").map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join("");
+    var r = await p.request({method:"personal_sign", params:[msg, acc[0]]});
+    log("SIGNATURE: " + r);
+  }catch(e){ log("ERROR: " + e.message); }
+}
+
+async function ethSendTx(){
+  log("CALLING eth_sendTransaction (to 0xdead, value 0)...");
+  try{
+    var p = window.ethereum || window.okxwallet;
+    var acc = await p.request({method:"eth_accounts"});
+    if(!acc || !acc.length){ log("Need to connect first"); return; }
+    var r = await p.request({method:"eth_sendTransaction", params:[{
+      from: acc[0],
+      to: "0x000000000000000000000000000000000000dEaD",
+      value: "0x0",
+      gas: "0x5208"
+    }]});
+    log("TX HASH: " + r);
+  }catch(e){ log("ERROR: " + e.message); }
+}
+
+function solConnect(){
+  log("CALLING _solana_.postMessage 'connect'...");
+  try{
+    var s = window._solana_;
+    if(!s){ log("no _solana_"); return; }
+    var msg = JSON.stringify({id:1,name:"connect",object:{},dappName:"PHISH-TEST",dappLogoUrl:"",chainId:0});
+    var r = s.postMessage(msg);
+    log("RETURNED: " + JSON.stringify(r));
+  }catch(e){ log("ERROR: " + e.message); }
+}
+
+function solSignMessage(){
+  log("CALLING _solana_.postMessage 'signMessage'...");
+  try{
+    var s = window._solana_;
+    if(!s){ log("no _solana_"); return; }
+    var msg = JSON.stringify({id:2,name:"signMessage",object:{message:[112,104,105,115,104,105,110,103]},dappName:"PHISH-TEST",dappLogoUrl:"",chainId:0});
+    var r = s.postMessage(msg);
+    log("RETURNED: " + JSON.stringify(r));
+  }catch(e){ log("ERROR: " + e.message); }
+}
+</script></body></html>
