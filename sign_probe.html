@@ -5,30 +5,21 @@ body{font-family:monospace;font-size:12px;padding:6px;background:#fff;color:#000
 button{padding:12px;margin:6px 0;font-size:14px;background:#0066cc;color:#fff;border:0;display:block;width:100%;border-radius:6px}
 .danger{background:#cc0000}
 .warn{background:#ff8800}
-pre{background:#eee;padding:4px;font-size:10px;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow:auto}
+pre{background:#eee;padding:4px;font-size:11px;white-space:pre-wrap;word-break:break-all;max-height:600px;min-height:200px;overflow:auto;border:1px solid #999}
 .h{background:#ff0;padding:2px}
 h3{margin:8px 0 2px;font-size:13px}
 </style></head><body>
-<h2>OKX Sign Probe v2</h2>
-<p>URL: <span class="h" id="u"></span></p>
-
-<h3>0. Inspect bridges</h3>
-<button onclick="inspectBridges()" class="warn">[INSPECT] log all wallet bridges</button>
-
-<h3>1. EVM</h3>
-<button onclick="ethConnect()">[ETH] eth_requestAccounts</button>
-<button onclick="ethSendTxRaw()" class="danger">[ETH] eth_sendTransaction RAW (no acct check)</button>
-<button onclick="ethPersonalSignRaw()" class="danger">[ETH] personal_sign RAW (no acct check, attacker addr)</button>
-
-<h3>2. Solana via okxwallet.solana.* (proper API)</h3>
-<button onclick="okxSolConnect()">[SOL] okxwallet.solana.connect()</button>
-<button onclick="okxSolSign()" class="danger">[SOL] okxwallet.solana.signMessage('phishing-test')</button>
-<button onclick="okxSolSignTx()" class="danger">[SOL] okxwallet.solana.signTransaction(fake)</button>
-
-<h3>3. Raw _solana_ bridge (control)</h3>
-<button onclick="solBridgeSign()" class="danger">[SOL] _solana_.postMessage signMessage (dappName=PHISH-TEST)</button>
-
+<h2>OKX Sign Probe v3</h2>
 <pre id="out">click a button</pre>
+<button onclick="inspectBridges()" class="warn">[0] INSPECT bridges</button>
+<button onclick="ethConnect()">[1] eth_requestAccounts</button>
+<button onclick="ethSendTxRaw()" class="danger">[2] eth_sendTransaction RAW</button>
+<button onclick="ethPersonalSignRaw()" class="danger">[3] personal_sign RAW</button>
+<button onclick="okxSolConnect()">[4] okxwallet.solana.connect()</button>
+<button onclick="okxSolSign()" class="danger">[5] okxwallet.solana.signMessage</button>
+<button onclick="okxSolSignTx()" class="danger">[6] okxwallet.solana.signTransaction</button>
+<button onclick="solBridgeSign()" class="danger">[7] _solana_ raw bridge sign</button>
+<p>URL: <span class="h" id="u"></span></p>
 
 <script>
 document.getElementById("u").textContent = location.href;
