@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BRIDGE_TEST</title>
+<style>body{font-family:monospace;font-size:14px;padding:8px;background:#fff;color:#000}
+.b{color:red;font-weight:bold}.g{color:green;font-weight:bold}.h{background:#ff0;padding:2px}</style>
+</head><body>
+<h2>OKX JS Bridge Enumeration</h2>
+<div id="out">scanning...</div>
+<script>
+var bridges = ["_solana_","_aptos_","_okx_sui_","tron","native",
+"okxInternalJSBridge","okxOsmosJSBridge","okxStarkJSBridge",
+"okxBtcJSBridge","okxNostrJSBridge","okxTonJSBridge",
+"okxwallet","ethereum","solana","tronWeb","aptos","sui","ton"];
+var out = document.getElementById("out");
+var html = "<p>UA: <span class=h>"+navigator.userAgent+"</span></p>";
+html += "<p>URL: <span class=h>"+location.href+"</span></p>";
+html += "<table border=1 cellpadding=4>";
+html += "<tr><th>Bridge</th><th>Present</th><th>Type</th><th>Methods</th></tr>";
+bridges.forEach(function(b){
+  var v = window[b];
+  var present = (typeof v !== "undefined" && v !== null);
+  var t = typeof v;
+  var methods = "";
+  if(present){
+    try{
+      var keys = [];
+      for(var k in v){ keys.push(k); }
+      methods = keys.slice(0,15).join(",");
+    }catch(e){methods="ERR:"+e.message;}
+  }
+  var cls = present ? "g" : "b";
+  html += "<tr><td>"+b+"</td><td class="+cls+">"+(present?"YES":"NO")+"</td><td>"+t+"</td><td style='font-size:10px;max-width:300px;word-break:break-all'>"+methods+"</td></tr>";
+});
+html += "</table>";
+out.innerHTML = html;
+</script></body></html>
