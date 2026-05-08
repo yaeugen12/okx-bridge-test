@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OKX_BRIDGE_PROBE</title>
+<style>
+body{font-family:monospace;font-size:12px;padding:6px;background:#fff;color:#000}
+.h{background:#ff0;padding:2px;word-break:break-all}
+.b{color:red;font-weight:bold}.g{color:green;font-weight:bold}
+button{padding:8px;margin:4px 0;font-size:14px;background:#222;color:#fff;border:0;display:block;width:100%}
+pre{background:#eee;padding:4px;font-size:10px;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto}
+.section{border:1px solid #888;padding:6px;margin:6px 0}
+</style></head><body>
+<h2>OKX Multi-Chain Bridge Probe</h2>
+<div id="env"></div>
+<div class="section">
+  <h3>EIP-1193 (ethereum / okxwallet)</h3>
+  <button onclick="probeEth()">eth_accounts (PASSIVE READ)</button>
+  <button onclick="probeChainId()">eth_chainId (PASSIVE READ)</button>
+  <pre id="eth_out">click to probe</pre>
+</div>
+<div class="section">
+  <h3>Solana (_solana_)</h3>
+  <button onclick="probeSol()">enum methods + connect probe</button>
+  <pre id="sol_out">click to probe</pre>
+</div>
+<div class="section">
+  <h3>Other bridges (probe enumeration)</h3>
+  <button onclick="probeAll()">enumerate all bridge methods</button>
+  <pre id="all_out">click to probe</pre>
+</div>
+<script>
+var envEl = document.getElementById("env");
+envEl.innerHTML = "<p>UA: <span class=h>"+navigator.userAgent+"</span></p><p>URL: <span class=h>"+location.href+"</span></p>";
+
+async function probeEth(){
+  var out = document.getElementById("eth_out"); out.textContent = "Calling ethereum.request({method:'eth_accounts'})...\n";
+  try{
+    var p = window.ethereum || window.okxwallet;
+    if(!p){ out.textContent += "FAIL: no ethereum/okxwallet provider\n"; return; }
+    out.textContent += "Provider keys: "+Object.keys(p).slice(0,30).join(",")+"\n";
+    out.textContent += "Provider proto methods: "+Object.getOwnPropertyNames(Object.getPrototypeOf(p)).slice(0,30).join(",")+"\n";
+    out.textContent += "isOkxWallet: "+p.isOkxWallet+", isMetaMask: "+p.isMetaMask+"\n";
+    var r = await p.request({method:"eth_accounts"});
+    out.textContent += "eth_accounts: "+JSON.stringify(r)+"\n";
+  }catch(e){ out.textContent += "ERR: "+e.message+"\n"; }
+}
+async function probeChainId(){
+  var out = document.getElementById("eth_out");
+  try{
+    var p = window.ethereum || window.okxwallet;
+    var c = await p.request({method:"eth_chainId"});
+    out.textContent += "eth_chainId: "+c+"\n";
+    var v = await p.request({method:"web3_clientVersion"}).catch(e=>"err:"+e.message);
+    out.textContent += "web3_clientVersion: "+v+"\n";
+  }catch(e){ out.textContent += "ERR: "+e.message+"\n"; }
+}
+
+function probeSol(){
+  var out = document.getElementById("sol_out"); out.textContent="";
+  var s = window._solana_ || window.solana;
+  if(!s){ out.textContent="FAIL: no _solana_ provider"; return; }
+  try{
+    out.textContent += "_solana_ keys: "+Object.keys(s).slice(0,30).join(",")+"\n";
+    out.textContent += "_solana_ proto: "+Object.getOwnPropertyNames(Object.getPrototypeOf(s)).slice(0,30).join(",")+"\n";
+    if(typeof s.postMessage === "function"){
+      out.textContent += "postMessage IS callable. Trying connect probe (won't sign)...\n";
+      // Construct a JSON-RPC style probe that should be safely handled
+      var probe = JSON.stringify({id:1,name:"connect",object:{},dappName:"probe",dappLogoUrl:"",chainId:0});
+      try{
+        var r = s.postMessage(probe);
+        out.textContent += "postMessage('connect') returned: "+JSON.stringify(r)+"\n";
+      }catch(e){ out.textContent += "postMessage threw: "+e.message+"\n"; }
+    }
+  }catch(e){ out.textContent += "ERR: "+e.message+"\n"; }
+}
+
+function probeAll(){
+  var out = document.getElementById("all_out"); out.textContent = "";
+  var bridges = ["_solana_","_aptos_","_okx_sui_","tron","native",
+    "okxInternalJSBridge","okxOsmosJSBridge","okxStarkJSBridge",
+    "okxBtcJSBridge","okxNostrJSBridge","okxTonJSBridge","okxwallet","ethereum","solana","tronWeb"];
+  bridges.forEach(function(b){
+    var v = window[b];
+    if(!v){ out.textContent += "[ABSENT] "+b+"\n"; return; }
+    try{
+      var keys = [];
+      for(var k in v){ keys.push(k); }
+      var protoKeys = Object.getOwnPropertyNames(Object.getPrototypeOf(v) || {});
+      out.textContent += "["+b+"] own: "+keys.slice(0,20).join(",")+"\n";
+      out.textContent += "  proto: "+protoKeys.slice(0,20).join(",")+"\n";
+      // Try common method existence checks (no invocation)
+      ["postMessage","request","send","sendAsync","enable","connect","disconnect","signTransaction","signMessage","sendTransaction"].forEach(function(m){
+        if(typeof v[m]==="function") out.textContent += "  FN: "+m+"\n";
+      });
+    }catch(e){ out.textContent += b+" ERR: "+e.message+"\n"; }
+  });
+}
+</script></body></html>
